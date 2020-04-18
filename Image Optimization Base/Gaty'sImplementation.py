@@ -4,40 +4,46 @@ import sys
 import scipy.io
 import scipy.misc
 import matplotlib.pyplot as plt
+%matplotlib inline
 from matplotlib.pyplot import imshow
 from PIL import Image
 import numpy as np
 import tensorflow as tf
 import datetime
+import time
 
 
 
 # Hyperparameter
 
-NOISE_RATIO = 0.5
-CONTENT_LAYERS = ['block5_conv2']
+NOISE_RATIO = 1
+CONTENT_LAYERS = ['block5_conv1']
 STYLE_LAYERS = ['block1_conv1',
                 'block2_conv1',
                 'block3_conv1', 
                 'block4_conv1', 
                 'block5_conv1']
-EPOCH = 10
-STEP = 100 # STEP per epoch
+STYLE_WEIGHT = [0.30,0.10,0.15,0.15,0.30]
 
-LR = 0.1# learning rate for optimizer "Adam"
+EPOCH = 1
+STEP = 300 # STEP per epoch
+
+LR = 0.5# learning rate for optimizer "Adam"
 EPSILON = 1e-1 # 
 BETA = 0.99
 
 CONTENT_WEIGHTS = 1e4
-STYLE_WEIGHTS = 0.1
-VARIATION_WEIGHTS = 30
+STYLE_WEIGHTS = 10
+VARIATION_WEIGHTS = 100
 
-IMAGE_NUM = 3
+IMAGE_NUM = 4
 
 #Total Loss keep tracking
+STYLE_LOSS_P = [[],[],[],[],[]]
 CONTENT_LOSS = []
 STYLE_LOSS = []
 TOTAL_LOSS = []
+VARIATION_LOSS = []
 
 class NRTmodel(tf.keras.models.Model):
     def __init__(self):
@@ -91,12 +97,13 @@ def load_image():
 #     content_batch2 = []
     for path in content_data_paths_full :
         if 'checkpoints' not in path:
-            image_tensor = tf.keras.preprocessing.image.load_img(path, #read the image from png to img form
-              target_size=(224,224),
-              interpolation='nearest'
-            )
+            image_tensor = tf.keras.preprocessing.image.load_img(path, target_size=(224,224),interpolation='nearest')
             image_tensor = tf.keras.preprocessing.image.img_to_array(image_tensor,dtype = "float32")  #convert img form to tensor form
             content_batch.append(image_tensor)
+#             content_batch.append(image_tensor)
+#             content_batch.append(image_tensor)
+#             content_batch.append(image_tensor)
+#             content_batch.append(image_tensor)
             
 #             image = tf.io.read_file(path)
 #             image = tf.image.decode_image(image, channels=3)
@@ -117,12 +124,13 @@ def load_image():
     style_batch = []
     for path in style_data_paths_full :
         if 'checkpoints' not in path:
-            image_tensor = tf.keras.preprocessing.image.load_img(path, #read the image from png to img form
-                target_size=(224,224),
-                color_mode='rgb',
-                interpolation='nearest')
+            image_tensor = tf.keras.preprocessing.image.load_img(path,target_size=(224,224),interpolation='nearest')
             image_tensor = tf.keras.preprocessing.image.img_to_array(image_tensor,dtype = "float32")  #convert img form to tensor form
             style_batch.append(image_tensor)
+#             style_batch.append(image_tensor)
+#             style_batch.append(image_tensor)
+#             style_batch.append(image_tensor)
+#             style_batch.append(image_tensor)
 
 
     style_batch = np.array(style_batch)   # Convert the list of tensor to one big tensor 
@@ -134,30 +142,30 @@ def load_image():
     noise_image = noise_image*NOISE_RATIO+content_image*(1-NOISE_RATIO)
 
 
-    w=10
-    h=10
-    fig=plt.figure(figsize=(12, 12))
-    columns = 2
-    rows = 2
+#     w=10
+#     h=10
+#     fig=plt.figure(figsize=(12, 12))
+#     columns = 2
+#     rows = 2
 
-    fig.add_subplot(rows, columns, 1)
-    plt.imshow(tf.cast(content_image[0],tf.int16))
-    fig.add_subplot(rows, columns, 2)
-    plt.imshow(tf.cast(content_image[1],tf.int16))
-    plt.show()
+#     fig.add_subplot(rows, columns, 1)
+#     plt.imshow(tf.cast(content_image[0],tf.int16))
+#     fig.add_subplot(rows, columns, 2)
+#     plt.imshow(tf.cast(content_image[1],tf.int16))
+#     plt.show()
                                         
     return content_image, style_image,noise_image
 
 
 def total_variation_loss(image):
-  x_deltas, y_deltas = high_pass_x_y(image)
-  return tf.reduce_mean(x_deltas**2) + tf.reduce_mean(y_deltas**2)
+    x_deltas, y_deltas = high_pass_x_y(image)
+    return tf.reduce_mean(x_deltas**2) + tf.reduce_mean(y_deltas**2)
 
 def high_pass_x_y(image):
-  x_var = image[:,:,1:,:] - image[:,:,:-1,:]
-  y_var = image[:,1:,:,:] - image[:,:-1,:,:]
+    x_var = image[:,:,1:,:] - image[:,:,:-1,:]
+    y_var = image[:,1:,:,:] - image[:,:-1,:,:]
 
-  return x_var, y_var
+    return x_var, y_var
 
 
 
@@ -172,26 +180,32 @@ def calculate_loss(outputs,target_content,target_style,image):
     content_loss = tf.math.add_n([tf.reduce_mean((tf.reshape(target_content[name],[IMAGE_NUM,-1]) - tf.reshape(output_content[name],[IMAGE_NUM,-1]))**2,keepdims = True,axis = 1)  
                                       for name in output_content.keys()])
     content_loss *= (CONTENT_WEIGHTS / len(CONTENT_LAYERS))
+    CONTENT_LOSS.append(content_loss[0][0])
     
     
     
     
     style_loss = tf.constant(zeros, shape=[IMAGE_NUM, 1],dtype= 'float32')
-    for name in STYLE_LAYERS:
+    for i,name in enumerate(STYLE_LAYERS):
         m,H ,W, C = output_style[name].get_shape().as_list()
         unrolled_target_style = tf.reshape(target_style[name],[m,-1,C])
         gram_target = tf.matmul(unrolled_target_style, unrolled_target_style, transpose_a=True)/tf.cast(H*W, tf.float32)
 
         unrolled_output_style = tf.reshape(output_style[name],[m,-1,C])
         gram_output = tf.matmul(unrolled_output_style, unrolled_output_style, transpose_a=True)/tf.cast(H*W, tf.float32)
-        style_loss += tf.reduce_mean((tf.reshape(gram_target,[IMAGE_NUM,-1]) - tf.reshape(gram_output,[IMAGE_NUM,-1]))**2,keepdims = True,axis = 1)
-        
+        style_loss_layer = tf.reduce_mean((tf.reshape(gram_target,[IMAGE_NUM,-1]) - tf.reshape(gram_output,[IMAGE_NUM,-1]))**2,keepdims = True,axis = 1)
+        STYLE_LOSS_P[i].append(style_loss_layer)
+        style_loss += (style_loss_layer*STYLE_WEIGHT[i])
                 
-    style_loss *= (STYLE_WEIGHTS / len(STYLE_LAYERS))
+    style_loss *= STYLE_WEIGHTS 
+    STYLE_LOSS.append(style_loss[0][0])
     
     x_var = image[:,:,1:,:] - image[:,:,:-1,:]
     y_var = image[:,1:,:,:] - image[:,:-1,:,:]
     variation_loss = (tf.reduce_mean(tf.reshape(x_var,[IMAGE_NUM,-1])**2,keepdims = True,axis = 1) + tf.reduce_mean(tf.reshape(y_var,[IMAGE_NUM,-1])**2,keepdims = True,axis = 1)) * VARIATION_WEIGHTS
+    VARIATION_LOSS.append(variation_loss[0][0])
+    
+    
     total_loss = tf.add_n([content_loss,style_loss,variation_loss])
         
     return total_loss
@@ -211,7 +225,7 @@ def calculate_loss(outputs,target_content,target_style,image):
 def pixel_clip(image):
     return tf.clip_by_value(image, clip_value_min=0.0, clip_value_max=255)
 
-def train_one_step(image_tensor,target_content,target_style,backbone_Net,optimizer):
+def train_one_step(image_tensor,target_content,target_style):
     image = tf.Variable(image_tensor,dtype = 'float32')
     with tf.GradientTape() as tape:
         outputs = backbone_Net(image)
@@ -221,12 +235,17 @@ def train_one_step(image_tensor,target_content,target_style,backbone_Net,optimiz
     image.assign(pixel_clip(image))
     return image
 
+
+
+
+# #define the optimizer
+backbone_Net = NRTmodel()
+optimizer = tf.optimizers.Adam(learning_rate=LR)
 def main():
     #load the image
     content_tensor, style_tensor, result_tensor= load_image()
 
     #define the VGG model and then specify the target_content and target_style used
-    backbone_Net = NRTmodel()
     target_content = backbone_Net(content_tensor)["content"]
     target_style = backbone_Net(style_tensor)["style"]
     
@@ -241,32 +260,58 @@ def main():
 #     columns = 2
 #     rows = 2
 
-
     
-    # #define the optimizer
-    optimizer = tf.optimizers.Adam(learning_rate=LR)
-
+    start_time = time.time()
     # train the result tensor picture
     for n in range(EPOCH):
         for m in range(STEP):
-            result_tensor = train_one_step(result_tensor,target_content,target_style,backbone_Net,optimizer)
+            result_tensor = train_one_step(result_tensor,target_content,target_style)
         for i in range(IMAGE_NUM):
             store_tensor = tf.cast(result_tensor,tf.int16)
             store_tensor = tf.cast(store_tensor,tf.uint8)
             img = tf.io.encode_jpeg(store_tensor[i])
             tf.io.write_file("picture"+str(i+1)+"_interation"+str(n+1)+".jpg",img)
+    
+    
+
+    
+    print("--- %s seconds ---" % (time.time() - start_time))
+    
+    print("Final loss data")
+    print("Content_loss:",CONTENT_LOSS[-1])
+    print("Style_loss:",STYLE_LOSS[-1])
+    print("Variation_loss:",VARIATION_LOSS[-1])
+    
+    print("STYLE LOSS BY LAYERS")
+    for i,name in enumerate(STYLE_LAYERS):
+        print(name,STYLE_LOSS_P[i][-1])
+    
     w=10
     h=10
     fig=plt.figure(figsize=(12, 12))
     columns = 2
     rows = 3
-
+    
     
 
     fig.add_subplot(rows, columns, 1)
     plt.imshow(tf.cast(result_tensor[0],tf.int16))
     fig.add_subplot(rows, columns, 2)
     plt.imshow(tf.cast(result_tensor[1],tf.int16))
+    fig.add_subplot(rows, columns, 3)
+    plt.imshow(tf.cast(result_tensor[2],tf.int16))
+    fig.add_subplot(rows, columns, 4)
+    fig, ax = plt.subplots()
+    plt.title("Training loss")
+    
+    ax.set_yscale('log')
+    ax.plot(CONTENT_LOSS, label='Contentloss')
+    ax.plot(STYLE_LOSS, label='Styleloss')
+    ax.plot(VARIATION_LOSS, label='variationloss')
+
+    plt.grid()
+    plt.legend()
+    plt.show()
 #     fig.add_subplot(rows, columns, 3)
 #     plt.plot(CONTENT_LOSS)
 #     plt.ylabel('content loss')
