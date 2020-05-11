@@ -1,38 +1,24 @@
 import tensorflow as tf
-import tensorflow_addons as tfa
 import numpy as np
 import time
-import PIL.Image
 import functools
+import PIL.Image
 import IPython.display as display
-import os
-#import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 
-style_path = './trainingimages/style/style01.jpg'
-content_path = './trainingimages/content/content01.png'
-
-
-
+style_path = './s.png'
+content_path = './c.png'
 style_layers = ['block1_conv1',
                 'block2_conv1',
                 'block3_conv1',
-                'block4_conv1',
-                'block5_conv2']
+                'block4_conv1']
 content_layers = ['block4_conv2']
-
-
-def tensor_to_image(tensor):
-    tensor = tf.clip_by_value(tensor, clip_value_min=0.0, clip_value_max=255.0)
-    tensor = np.array(tensor, dtype=np.uint8)   # convert tf array to np array of integers
-    if np.ndim(tensor)>3:
-        assert tensor.shape[0] == 1  # asserts that the BATCH_SIZE = 1
-        tensor = tensor[0]   # take the first image
-    return PIL.Image.fromarray(tensor)
-
+style_weight = 1e-5
+content_weight = 1
 
 def load_img(path_to_img, rescale = False):
     # we rescale the image to max dimension 256 for fasters processing
-    max_dim = 256
+    max_dim = 256    
     img = tf.io.read_file(path_to_img)   # read the image
     img = tf.image.decode_image(img, channels=3)    # decode into image content
     img = tf.image.convert_image_dtype(img, tf.float32)    # convert to float
@@ -40,27 +26,21 @@ def load_img(path_to_img, rescale = False):
     if rescale:
         img = tf.image.resize(img, tf.constant([max_dim, max_dim]))
     else:
-        shape = tf.cast(tf.shape(img)[:-1], tf.float32)
+        shape = tf.cast(tf.shape(img)[:-1], tf.float32)   
         # get the shape of image, cast it to float type for division, expect the last channel dimension
         long_dim = max(shape)
         scale = max_dim / long_dim    # scale accordingly
         new_shape = tf.cast(shape * scale, tf.int32)   # cast the new shape to integer
         img = tf.image.resize(img, new_shape)   # resize image
-
-img = img[tf.newaxis, :]   # newaxis builts a new batch axis in the image at first dimension
-return img
-
-
-content_image = load_img(content_path, rescale = True)
-style_image = load_img(style_path, rescale = False)
-
-
+        
+    img = img[tf.newaxis, :]   # newaxis builts a new batch axis in the image at first dimension
+    return img
 
 def periodic_padding(x, padding=1):
     '''
-        x: shape (batch_size, d1, d2)
-        return x padded with periodic boundaries. i.e. torus or donut
-        '''
+    x: shape (BATCH_SIZE, d1, d2)
+    return x padded with periodic boundaries. i.e. torus or donut
+    '''
     d1 = x.shape[1] # dimension 1: height
     d2 = x.shape[2] # dimension 2: width
     p = padding
@@ -83,6 +63,7 @@ def periodic_padding(x, padding=1):
     padded_x = tf.concat([top, middle, bottom], axis=1)
     return padded_x
 
+
 def CircularPadding(inputs, kernel_size = 3):
     """Prepares padding for Circular convolution"""
     # split all the filters
@@ -97,46 +78,33 @@ def CircularPadding(inputs, kernel_size = 3):
     return tf.concat(output_split, axis = -1)
 
 
-
 def conv_block(input_size, in_filters, out_filters):
     """Implements the convolutional block with 3x3, 3x3, 1x1 filters, with proper batch normalization and activation"""
     inputs = tf.keras.layers.Input((input_size, input_size, in_filters, ))   # in_filters many channels of input image
     
     # first 3x3 conv
     conv1_pad = tf.keras.layers.Lambda(lambda x: CircularPadding(x))(inputs)
-    conv1_out = tf.keras.layers.Conv2D(out_filters, kernel_size = (3, 3), strides = 1,
+    conv1_out = tf.keras.layers.Conv2D(out_filters, kernel_size = (3, 3), strides = 1, 
                                        padding = 'valid', name = 'conv1')(conv1_pad)
-                                       hidden_1 = tfa.layers.InstanceNormalization(axis=3,
-                                                                                   center=True,
-                                                                                   scale=True,
-                                                                                   beta_initializer="random_uniform",
-                                                                                   gamma_initializer="random_uniform")(conv1_out)
-                                       conv1_out_final = tf.keras.layers.LeakyReLU(name = 'rel1')(hidden_1)
-                                       
-                                       # second 3x3 conv
-                                       conv2_pad = tf.keras.layers.Lambda(lambda x: CircularPadding(x))(conv1_out_final)
-                                       conv2_out = tf.keras.layers.Conv2D(out_filters, kernel_size = (3, 3), strides = 1,
-                                                                          padding = 'valid', name = 'conv2')(conv2_pad)
-                                       hidden_2 = tfa.layers.InstanceNormalization(axis=3,
-                                                                                   center=True,
-                                                                                   scale=True,
-                                                                                   beta_initializer="random_uniform",
-                                                                                   gamma_initializer="random_uniform")(conv2_out)
-                                       conv2_out_final = tf.keras.layers.LeakyReLU(name = 'rel2')(hidden_2)
-                                       
-                                       # final 1x1 conv
-                                       conv3_out = tf.keras.layers.Conv2D(out_filters, kernel_size = (1, 1), strides = 1,
-                                                                          padding = 'same', name = 'conv3')(conv2_out_final)
-                                       hidden_3 = tfa.layers.InstanceNormalization(axis=3,
-                                                                                   center=True,
-                                                                                   scale=True,
-                                                                                   beta_initializer="random_uniform",
-                                                                                   gamma_initializer="random_uniform")(conv3_out)
-                                       conv3_out_final = tf.keras.layers.LeakyReLU(name = 'rel3')(hidden_3)
-                                       
-                                       # final model
-                                       conv_block = tf.keras.models.Model(inputs, conv3_out_final)
-                                       return conv_block
+    hidden_1 = tf.keras.layers.BatchNormalization()(conv1_out)
+    conv1_out_final = tf.keras.layers.LeakyReLU(name = 'rel1')(hidden_1)
+    
+    # second 3x3 conv
+    conv2_pad = tf.keras.layers.Lambda(lambda x: CircularPadding(x))(conv1_out_final)
+    conv2_out = tf.keras.layers.Conv2D(out_filters, kernel_size = (3, 3), strides = 1, 
+                                       padding = 'valid', name = 'conv2')(conv2_pad)
+    hidden_2 = tf.keras.layers.BatchNormalization()(conv2_out)
+    conv2_out_final = tf.keras.layers.LeakyReLU(name = 'rel2')(hidden_2)
+    
+    # final 1x1 conv
+    conv3_out = tf.keras.layers.Conv2D(out_filters, kernel_size = (1, 1), strides = 1, 
+                                       padding = 'same', name = 'conv3')(conv2_out_final)
+    hidden_3 = tf.keras.layers.BatchNormalization()(conv3_out)
+    conv3_out_final = tf.keras.layers.LeakyReLU(name = 'rel3')(hidden_3)
+    
+    # final model
+    conv_block = tf.keras.models.Model(inputs, conv3_out_final)
+    return conv_block
 
 
 
@@ -144,22 +112,16 @@ def join_block(input_size, n_filter_low, n_filter_high):
     input1 = tf.keras.layers.Input((input_size, input_size, n_filter_low, ))  # input to low resolution image
     input2 = tf.keras.layers.Input((2*input_size, 2*input_size, n_filter_high, ))  # input to high resolution image
     upsampled_input = tf.keras.layers.UpSampling2D(size = (2, 2))(input1)
-    hidden_1 = tfa.layers.InstanceNormalization(axis=3,
-                                                center=True,
-                                                scale=True,
-                                                beta_initializer="random_uniform",
-                                                gamma_initializer="random_uniform")(upsampled_input)
-                                                hidden_2 = tfa.layers.InstanceNormalization(axis=3,
-                                                                                            center=True,
-                                                                                            scale=True,
-                                                                                            beta_initializer="random_uniform",
-                                                                                            gamma_initializer="random_uniform")(input2)
-                                                
-                                                outputs = tf.keras.layers.Concatenate(axis=-1)([hidden_1, hidden_2])
-                                                
-                                                # final model
-                                                join_block = tf.keras.models.Model([input1, input2], outputs)
-                                                return join_block
+    hidden_1 = tf.keras.layers.BatchNormalization()(upsampled_input)
+    hidden_2 = tf.keras.layers.BatchNormalization()(input2)
+    
+    outputs = tf.keras.layers.Concatenate(axis=-1)([hidden_1, hidden_2])
+    
+    # final model
+    join_block = tf.keras.models.Model([input1, input2], outputs)
+    return join_block
+
+
 
 def generator_network():
     # create input nodes for noise tensors
@@ -170,7 +132,7 @@ def generator_network():
     noise5 = tf.keras.layers.Input((16, 16, 3, ), name = 'noise_5')
     noise6 = tf.keras.layers.Input((8, 8, 3, ), name = 'noise_6')
     content = tf.keras.layers.Input((256, 256, 3, ), name = 'content_input')
-    
+
     # downsample the content image
     content_image_8 = tf.keras.layers.Lambda(lambda x: tf.image.resize(x, tf.constant([8, 8])))(content)
     content_image_16 = tf.keras.layers.Lambda(lambda x: tf.image.resize(x, tf.constant([16, 16])))(content)
@@ -214,14 +176,22 @@ def generator_network():
 
 
 
+def gram_matrix(input_tensor):
+    result = tf.linalg.einsum('bijc,bijd->bcd', input_tensor, input_tensor)   # compute the sum in numerator
+    input_shape = tf.shape(input_tensor)  # get the shape
+    num_locations = tf.cast(input_shape[1]*input_shape[2], tf.float32)  
+    return result/(num_locations)
+
+
+
 def vgg_layers(layer_names):
     """ Creates a vgg model that returns a list of intermediate output values."""
     # Load our model. Load pretrained VGG, trained on imagenet data
     vgg = tf.keras.applications.VGG19(include_top=False, weights='imagenet')  # load the vgg model
     vgg.trainable = False    # do not train over vgg model parameters
-    
+  
     outputs = [vgg.get_layer(name).output for name in layer_names]    # the output of the layers that we want
-    
+
     model = tf.keras.Model([vgg.input], outputs)   # create a keras model
     return model
 
@@ -234,152 +204,130 @@ class TextureNetwork(tf.keras.models.Model):
         self.content_layers = content_layers
         self.num_style_layers = len(style_layers)
         self.vgg.trainable = False  # we are not going to train vgg network
-        
+
         self.gen = generator_network()   # create a generator network as part of it
         self.gen.trainable = True   # we are going to train this generator
-    
-    
-    def call(self, content, batch_size = 16):
+        
+
+    def call(self, content, BATCH_SIZE = 16):
         # generates noise required for the network
-        noise1 = tf.random.uniform((batch_size, 256, 256, 3))
-        noise2 = tf.random.uniform((batch_size, 128, 128, 3))
-        noise3 = tf.random.uniform((batch_size, 64, 64, 3))
-        noise4 = tf.random.uniform((batch_size, 32, 32, 3))
-        noise5 = tf.random.uniform((batch_size, 16, 16, 3))
-        noise6 = tf.random.uniform((batch_size, 8, 8, 3))
-        
+        noise1 = tf.random.uniform((BATCH_SIZE, 256, 256, 3))
+        noise2 = tf.random.uniform((BATCH_SIZE, 128, 128, 3))
+        noise3 = tf.random.uniform((BATCH_SIZE, 64, 64, 3))
+        noise4 = tf.random.uniform((BATCH_SIZE, 32, 32, 3))
+        noise5 = tf.random.uniform((BATCH_SIZE, 16, 16, 3))
+        noise6 = tf.random.uniform((BATCH_SIZE, 8, 8, 3))
+    
         gen_image = self.gen([content, noise1, noise2, noise3, noise4, noise5, noise6])   # pass through the generator to obtain generated image
-        
+    
         preprocessed_input = tf.keras.applications.vgg19.preprocess_input(gen_image)  # preprocess the image
         outputs = self.vgg(preprocessed_input)  # get the output from only the required layers
         
-        style_outputs, content_outputs = (outputs[:self.num_style_layers],
-                                          outputs[self.num_style_layers:])
-            
-                                          style_outputs = [gram_matrix(style_output)
-                                                           for style_output in style_outputs]  # create style type output to compare
-                                          
-                                          style_dict = {style_name:value
-                                              for style_name, value
-                                                  in zip(self.style_layers, style_outputs)}
-                                          
-                                              content_dict = {content_name:value
-                                                  for content_name, value
-                                                      in zip(self.content_layers, content_outputs)}
-                                                          
-                                                          
-                                                          return {'gen':gen_image, 'content':content_dict, 'style':style_dict}
+        style_outputs, content_outputs = (outputs[:self.num_style_layers], 
+                                      outputs[self.num_style_layers:])
+        
+        style_outputs = [gram_matrix(style_output)
+                         for style_output in style_outputs]  # create style type output to compare
+
+        style_dict = {style_name:value
+                      for style_name, value
+                      in zip(self.style_layers, style_outputs)}
+
+        content_dict = {content_name:value 
+                    for content_name, value 
+                    in zip(self.content_layers, content_outputs)}
 
 
-def gram_matrix(input_tensor):
-    result = tf.linalg.einsum('bijc,bijd->bcd', input_tensor, input_tensor)   # compute the sum in numerator
-    input_shape = tf.shape(input_tensor)  # get the shape
-    num_locations = tf.cast(input_shape[1]*input_shape[2], tf.float32)
-    return result/(num_locations)
+        return {'gen':gen_image, 'content':content_dict, 'style':style_dict}
 
 optimizer = tf.keras.optimizers.Adam(learning_rate = 1e-3)  # use an Adam optimizer
 tex_net = TextureNetwork(style_layers, content_layers)   # create the texture network
-
-
+tex_net.load_weights('./checkpoints6/my_checkpoint')
 def extract_targets(inputs):
     inputs = inputs*255.0
     preprocessed_input = tf.keras.applications.vgg19.preprocess_input(inputs)  # preprocess the input image
     outputs = vgg_layers(style_layers + content_layers)(preprocessed_input)  # get the output from only the required layers
-    
-    style_outputs, content_outputs = (outputs[:len(style_layers)],
-                                      outputs[len(style_layers):])
         
-                                      style_outputs = [gram_matrix(style_output)
-                                                       for style_output in style_outputs]  # create style type output to compare
-                                      
-                                      style_dict = {style_name:value
-                                          for style_name, value
-                                              in zip(style_layers, style_outputs)}
+    style_outputs, content_outputs = (outputs[:len(style_layers)], 
+                                       outputs[len(style_layers):])
+        
+    style_outputs = [gram_matrix(style_output)
+                         for style_output in style_outputs]  # create style type output to compare
 
-content_dict = {content_name:value
-    for content_name, value
-        in zip(content_layers, content_outputs)}
-    
+    style_dict = {style_name:value
+                      for style_name, value
+                      in zip(style_layers, style_outputs)}
+
+    content_dict = {content_name:value 
+                    for content_name, value 
+                    in zip(content_layers, content_outputs)}
+
     return {'content':content_dict, 'style':style_dict}
 
 
-style_targets = extract_targets(style_image)['style']
-content_targets = extract_targets(content_image)['content']
 
 
-#parameters
-style_weight = 1e-6
-content_weight = 1
-
-
-
-def custom_loss(outputs, batch_size):
+def custom_loss(outputs, BATCH_SIZE,style_targets,content_targets):
     gen_outputs = outputs['gen']
     style_outputs = outputs['style']   # for generated image, get the style
     content_outputs = outputs['content']  # get content
     batch_loss = 0
-    for i in range(batch_size):
-        style_loss = tf.add_n([tf.reduce_mean((style_outputs[name][i]-style_targets[name])**2)
-                               for name in style_outputs.keys()])
-                               style_loss *= style_weight / len(style_layers)
-                               
-                               content_loss = tf.add_n([tf.reduce_mean((content_outputs[name][i]-content_targets[name])**2)
-                                                        for name in content_outputs.keys()])
-                               content_loss *= content_weight / len(content_layers)
-                               
-                               loss = style_loss + content_loss
-                               batch_loss += loss
+    for i in range(BATCH_SIZE):
+        style_loss = tf.add_n([tf.reduce_mean((style_outputs[name][i]-style_targets[name])**2) 
+                           for name in style_outputs.keys()])
+        style_loss *= style_weight / len(style_layers)
 
-batch_loss /= batch_size
+        content_loss = tf.add_n([tf.reduce_mean((content_outputs[name][i]-content_targets[name])**2) 
+                                 for name in content_outputs.keys()])
+        content_loss *= content_weight / len(content_layers)
+        
+        loss = style_loss + content_loss
+        batch_loss += loss
+        
+    batch_loss /= BATCH_SIZE
     return batch_loss
 
+
 @tf.function()
-def train_step(content_image, batch_size):
+def train_step(content_image, BATCH_SIZE,s,c):
     
     with tf.GradientTape() as tape:
-        outputs = tex_net(content_image, batch_size)
-        loss = custom_loss(outputs, batch_size)
-    
+        outputs = tex_net(content_image, BATCH_SIZE)
+        loss = custom_loss(outputs, BATCH_SIZE,s,c)
+        
     gradients = tape.gradient(loss, tex_net.trainable_variables)  # obtain the gradients recorded by the tape
     optimizer.apply_gradients(zip(gradients, tex_net.trainable_variables))   # apply the training rule using the gradients to modify the current value of prameters
     return outputs, loss
 
 
 
-def main():
-    content_image = load_img(content_path, rescale = True)
-    tensor_to_image(content_image * 255.0)
-    
-    style_image = load_img(style_path, rescale = False)
-    tensor_to_image(style_image * 255.0)
-    
-    optimizer = tf.keras.optimizers.Adam(learning_rate = 1e-3)  # use an Adam optimizer
-    tex_net = TextureNetwork(style_layers, content_layers)   # create the texture network
-    output = tex_net(content_image, 1)
-    
-    style_targets = extract_targets(style_image)['style']
-    content_targets = extract_targets(content_image)['content']
-    
-    
-    batch_size = 32
-    my_content = tf.concat([content_image for _ in range(batch_size)], axis = 0)
-    
-    n_epoch = 10
-    n_iter = 250
-    iter_to_show_output = 25
-    
-    loss_array = []
-    for epoch in range(n_epoch):
-        msg = 'Epoch: ' + str(epoch)
-        print(msg)
-        #os.system('echo ' + msg)
-        for step in range(n_iter):
-            outputs, loss = train_step(my_content, batch_size)
-            if step % iter_to_show_output == 0:
-                os.system('echo loss: ' + str(float(loss)))
-                print('Loss: ', loss)
-                loss_array.append(loss)
-        display.display(tensor_to_image(tex_net(content_image, 1)['gen']))
+style_image = load_img(style_path, rescale = False)
+content_image = load_img(content_path, rescale = True)
+style_targets = extract_targets(style_image)['style']
+content_targets = extract_targets(content_image)['content']
+BATCH_SIZE = 32
+my_content = tf.concat([content_image for _ in range(BATCH_SIZE)], axis = 0)
 
-if __name__ == '__main__':
-    main()
+n_epoch = 10
+n_iter = 250
+iter_to_show_output = 25
+
+loss_array = []
+for epoch in range(n_epoch):
+    msg = 'Epoch: ' + str(epoch)
+    print(msg)
+    for step in range(n_iter):
+        outputs, loss = train_step(my_content, BATCH_SIZE,style_targets,content_targets)
+        if step % iter_to_show_output == 0:
+            print('Loss: ', loss)
+            tex_net.save_weights('./checkpoints6/my_checkpoint')
+            loss_array.append(loss)
+            img = tex_net(content_image, 1)['gen']
+            print(tf.math.reduce_max(img[0]))
+            print(tf.math.reduce_min(img[0]))
+            fig=plt.figure(figsize=(12, 12))
+            fig.add_subplot(1, 1, 1)
+            img = tf.cast(tf.clip_by_value(img, clip_value_min=0.0, clip_value_max=255),tf.int16)
+            plt.imshow(img[0])
+            plt.show()
+        

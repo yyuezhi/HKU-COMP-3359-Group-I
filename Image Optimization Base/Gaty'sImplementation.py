@@ -16,7 +16,7 @@ import time
 
 # Hyperparameter
 
-NOISE_RATIO = 1
+NOISE_RATIO = 0.4
 CONTENT_LAYERS = ['block5_conv1']
 STYLE_LAYERS = ['block1_conv1',
                 'block2_conv1',
